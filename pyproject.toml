@@ -7,7 +7,13 @@ authors = [
     { name = "rafaeljyokondostudy", email = "rafaeljyokondo.study@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "confluent-kafka>=2.16.1",
+    "fastavro>=1.13.1",
+    "openai>=3.46.0",
+    "pandas>=3.1.1",
+    "pyspark>=4.3.0",
+]
 
 [project.scripts]
 spark-realtime-streaming = "spark_realtime_streaming:main"
