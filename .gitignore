@@ -221,3 +221,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+src/datasets/yelp_academic_dataset_review.json
