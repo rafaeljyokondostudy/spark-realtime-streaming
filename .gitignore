@@ -183,6 +183,9 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
+# PySpark temporary checkpoint folders
+tmp/
+
 # Cython debug symbols
 cython_debug/
 
