@@ -1,0 +1,47 @@
+services:
+  spark-master:
+    container_name: spark-master
+    hostname: spark-master
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    volumes:
+      - ./config:/opt/spark/config
+      - ./jobs:/opt/spark/jobs
+      - ./datasets:/opt/spark/datasets
+      - ./requirements.txt:/tmp/requirements.txt:ro
+    ports:
+      - "9090:8080"
+      - "7077:7077"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - spark-r-s
+
+  spark-worker:
+    container_name: spark-worker
+    hostname: spark-worker
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    volumes:
+      - ./config:/opt/spark/config
+      - ./jobs:/opt/spark/jobs
+      - ./datasets:/opt/spark/datasets
+      - ./requirements.txt:/tmp/requirements.txt:ro
+    depends_on:
+      spark-master:
+        condition: service_healthy
+    networks:
+      - spark-r-s
+
+networks:
+  spark-r-s:
+    driver: bridge
+

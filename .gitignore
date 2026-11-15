@@ -183,6 +183,9 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
+# PySpark temporary checkpoint folders
+tmp/
+
 # Cython debug symbols
 cython_debug/
 
@@ -221,3 +224,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+src/datasets/yelp_academic_dataset_review.json

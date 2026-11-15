@@ -1,0 +1,45 @@
+# Keep this aligned with pyspark==4.3.0 and the Kafka connector
+# org.apache.spark:spark-sql-kafka-0-10_2.13:4.3.0.
+FROM apache/spark:4.3.0
+
+USER root
+
+WORKDIR /opt/spark
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        libbz2-dev \
+        libffi-dev \
+        liblzma-dev \
+        libncursesw5-dev \
+        libreadline-dev \
+        libsqlite3-dev \
+        libssl-dev \
+        make \
+        tk-dev \
+        wget \
+        xz-utils \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PYENV_ROOT=/opt/pyenv
+ENV PATH="${PYENV_ROOT}/bin:${PYENV_ROOT}/shims:${PATH}"
+
+RUN git clone --depth 1 https://github.com/pyenv/pyenv.git ${PYENV_ROOT} && \
+    pyenv install 3.14.7 && \
+    pyenv global 3.14.7 && \
+    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/python /usr/local/bin/python && \
+    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/python /usr/local/bin/python3 && \
+    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/pip /usr/local/bin/pip && \
+    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/pip3 /usr/local/bin/pip3
+
+
+COPY requirements.txt /tmp/requirements.txt
+RUN python -m pip install --upgrade pip && \
+    python -m pip install --no-cache-dir -r /tmp/requirements.txt
+
+ENV PYTHONPATH=/opt/spark
