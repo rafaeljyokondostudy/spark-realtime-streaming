@@ -5,7 +5,9 @@ from pathlib import Path
 
 import pandas as pd
 
-SOCKET_HOST = "127.0.0.1"
+# Bind to all interfaces so the producer is reachable from the Spark driver/executors.
+# The Spark socket source connects to this endpoint, so 0.0.0.0 is the correct bind address.
+SOCKET_HOST = "0.0.0.0"
 SOCKET_PORT = 8522
 
 
