@@ -6,6 +6,8 @@ USER root
 
 WORKDIR /opt/spark
 
+ARG PYTHON_VERSION=3.14.7
+
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
@@ -26,20 +28,20 @@ RUN apt-get update && \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PYENV_ROOT=/opt/pyenv
-ENV PATH="${PYENV_ROOT}/bin:${PYENV_ROOT}/shims:${PATH}"
+ENV PYENV_ROOT=/opt/pyenv \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PATH="${PYENV_ROOT}/bin:${PYENV_ROOT}/shims:${PATH}" \
+    PYTHONPATH=/opt/spark
 
 RUN git clone --depth 1 https://github.com/pyenv/pyenv.git ${PYENV_ROOT} && \
-    pyenv install 3.14.7 && \
-    pyenv global 3.14.7 && \
-    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/python /usr/local/bin/python && \
-    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/python /usr/local/bin/python3 && \
-    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/pip /usr/local/bin/pip && \
-    ln -sf ${PYENV_ROOT}/versions/3.14.7/bin/pip3 /usr/local/bin/pip3
-
+    pyenv install ${PYTHON_VERSION} && \
+    pyenv global ${PYTHON_VERSION} && \
+    ln -sf ${PYENV_ROOT}/versions/${PYTHON_VERSION}/bin/python /usr/local/bin/python && \
+    ln -sf ${PYENV_ROOT}/versions/${PYTHON_VERSION}/bin/python /usr/local/bin/python3 && \
+    ln -sf ${PYENV_ROOT}/versions/${PYTHON_VERSION}/bin/pip /usr/local/bin/pip && \
+    ln -sf ${PYENV_ROOT}/versions/${PYTHON_VERSION}/bin/pip3 /usr/local/bin/pip3
 
 COPY requirements.txt /tmp/requirements.txt
 RUN python -m pip install --upgrade pip && \
     python -m pip install --no-cache-dir -r /tmp/requirements.txt
-
-ENV PYTHONPATH=/opt/spark
