@@ -2,6 +2,8 @@ services:
   spark-master:
     container_name: spark-master
     hostname: spark-master
+    env_file:
+      - ../.env
     build:
       context: .
       dockerfile: Dockerfile.spark
@@ -26,6 +28,8 @@ services:
   spark-worker:
     container_name: spark-worker
     hostname: spark-worker
+    env_file:
+      - ../.env
     build:
       context: .
       dockerfile: Dockerfile.spark
