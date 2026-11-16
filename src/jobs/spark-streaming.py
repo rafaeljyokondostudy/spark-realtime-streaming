@@ -1,12 +1,14 @@
 import os
-import shutil
+import time
 from pathlib import Path
 
-from pyspark.sql.types import StructField, StructType, StringType, FloatType
-from pyspark.sql.functions import col, from_json, to_json, struct, udf, when, lit
-from pyspark.sql import SparkSession
 from openai import OpenAI
-from config.config import config
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, from_json, struct, to_json, udf, when
+from pyspark.sql.types import FloatType, StringType, StructField, StructType
+
+from config.config import config, load_config
+
 
 def ensure_windows_hadoop_setup() -> None:
     if os.name != "nt":
@@ -37,11 +39,17 @@ def ensure_windows_hadoop_setup() -> None:
     os.environ["hadoop.home.dir"] = str(hadoop_home)
     os.environ["PATH"] = str(hadoop_home / "bin") + os.pathsep + os.environ.get("PATH", "")
 
-def sentiment_analysis(comment) -> str:
-    if not comment:
+
+def get_runtime_config() -> dict:
+    return load_config()
+
+
+def sentiment_analysis(comment: str) -> str:
+    if not comment or not str(comment).strip():
         return "EMPTY"
 
-    client = OpenAI(api_key=config["openai"]["api_key"])
+    cfg = get_runtime_config()
+    client = OpenAI(api_key=cfg["openai"]["api_key"])
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
         temperature=0,
@@ -53,17 +61,42 @@ def sentiment_analysis(comment) -> str:
                     "NEGATIVE, or NEUTRAL. Do not add punctuation or explanations."
                 ),
             },
-            {"role": "user", "content": comment},
+            {"role": "user", "content": str(comment)},
         ],
+        timeout=30,
     )
     return response.choices[0].message.content.strip().upper()
 
+
+def sentiment_analysis_with_retry(comment: str, retries: int = 3, backoff_seconds: float = 1.0) -> str:
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            return sentiment_analysis(comment)
+        except Exception as exc:  # pragma: no cover - actual OpenAI failures are external
+            last_error = exc
+            if attempt == retries:
+                break
+            time.sleep(backoff_seconds * attempt)
+    raise RuntimeError(f"Sentiment analysis failed after {retries} attempts") from last_error
+
+
+def build_jaas_config() -> str:
+    cfg = get_runtime_config()
+    return (
+        'org.apache.kafka.common.security.plain.PlainLoginModule required '
+        f'username="{cfg["kafka"]["sasl.username"]}" '
+        f'password="{cfg["kafka"]["sasl.password"]}";'
+    )
+
+
 def start_streaming(spark: SparkSession, checkpoint_dir: Path):
-    topic = "customers_review"
+    cfg = get_runtime_config()
+    topic = os.getenv("KAFKA_TOPIC", "customers_review")
     stream_df = (
         spark.readStream.format("socket")
-        .option("host", "spark-master")
-        .option("port", 8522)
+        .option("host", os.getenv("SOCKET_HOST", "spark-master"))
+        .option("port", int(os.getenv("SOCKET_PORT", "8522")))
         .load()
     )
 
@@ -76,30 +109,41 @@ def start_streaming(spark: SparkSession, checkpoint_dir: Path):
         StructField("text", StringType()),
     ])
 
-    stream_df = stream_df.select(from_json(col('value'), schema).alias("data")).select(("data.*"))
-    sentiment_analysis_udf = udf(sentiment_analysis, StringType())
-    stream_df = stream_df.withColumn("feedback", when(col("text").isNotNull(), sentiment_analysis_udf(col("text"))).otherwise(None))
-    
-    kafka_df = stream_df.selectExpr("CAST(review_id AS STRING) AS key", "to_json(struct(*)) AS value")
+    parsed_df = stream_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
+    parsed_df = parsed_df.filter(col("review_id").isNotNull() & col("text").isNotNull())
 
-    jaas_config = (
-        'org.apache.kafka.common.security.plain.PlainLoginModule required '
-        f'username="{config["kafka"]["sasl.username"]}" '
-        f'password="{config["kafka"]["sasl.password"]}";'
+    sentiment_udf = udf(lambda text: sentiment_analysis_with_retry(text), StringType())
+    enriched_df = parsed_df.withColumn(
+        "feedback",
+        when(col("text").isNotNull(), sentiment_udf(col("text"))).otherwise(None),
     )
 
-    query = (
+    kafka_df = enriched_df.selectExpr(
+        "CAST(review_id AS STRING) AS key",
+        "to_json(struct(*)) AS value",
+    )
+
+    kafka_options = {
+        "kafka.bootstrap.servers": cfg["kafka"]["bootstrap.servers"],
+        "kafka.security.protocol": cfg["kafka"]["security.protocol"],
+        "kafka.sasl.mechanism": cfg["kafka"]["sasl.mechanism"],
+        "kafka.sasl.jaas.config": build_jaas_config(),
+        "kafka.acks": cfg["kafka"]["acks"],
+        "kafka.enable.idempotence": str(cfg["kafka"]["enable.idempotence"]).lower(),
+        "kafka.retries": str(cfg["kafka"]["retries"]),
+        "kafka.max.in.flight.requests.per.connection": str(cfg["kafka"]["max.in.flight.requests.per.connection"]),
+        "kafka.delivery.timeout.ms": str(cfg["kafka"]["delivery.timeout.ms"]),
+        "kafka.request.timeout.ms": str(cfg["kafka"]["request.timeout.ms"]),
+        "checkpointLocation": str(checkpoint_dir.as_posix()),
+        "topic": topic,
+    }
+
+    return (
         kafka_df.writeStream
         .format("kafka")
-        .option("kafka.bootstrap.servers", config["kafka"]["bootstrap.servers"])
-        .option("kafka.security.protocol", config["kafka"]["security.protocol"])
-        .option("kafka.sasl.mechanism", config["kafka"]["sasl.mechanism"])
-        .option("kafka.sasl.jaas.config", jaas_config)
-        .option("checkpointLocation", str(checkpoint_dir.as_posix()))
-        .option("topic", topic)
+        .options(**kafka_options)
         .trigger(processingTime="5 seconds")
         .start()
-        .awaitTermination()
     )
 
 
@@ -107,8 +151,6 @@ if __name__ == "__main__":
     ensure_windows_hadoop_setup()
 
     checkpoint_dir = Path(__file__).resolve().parents[2] / "tmp" / "spark-checkpoints" / "kafka-stream"
-    if checkpoint_dir.exists():
-        shutil.rmtree(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     spark = (
@@ -119,4 +161,5 @@ if __name__ == "__main__":
         .getOrCreate()
     )
 
-    start_streaming(spark, checkpoint_dir)
+    query = start_streaming(spark, checkpoint_dir)
+    query.awaitTermination()
