@@ -1,87 +1,47 @@
-# Real-Time Streaming with Apache Spark, TCP Socket, OpenAI, and Kafka
+# Spark Realtime Streaming
 
-A practical end-to-end streaming project that reads records from a JSON dataset, pushes them over a TCP socket, processes them in real time with Apache Spark Structured Streaming, enriches each review with an OpenAI sentiment label, and publishes the result to a Kafka topic.
+Real-time sentiment analysis for review data using Apache Spark Structured Streaming, Kafka, and OpenAI.
 
-This repository is designed as a hands-on learning project for building data engineering pipelines with Python, Spark, Kafka, and LLM-based inference.
+This project is built for data engineers, ML practitioners, and developers who want a practical example of streaming data enrichment in a production-like architecture without needing a full enterprise setup.
 
-## Table of Contents
+[![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Spark](https://img.shields.io/badge/Apache%20Spark-4.3.0-E25A1C?logo=apachespark&logoColor=white)](https://spark.apache.org/)
+[![Kafka](https://img.shields.io/badge/Kafka-Confluent%20Cloud-231F20?logo=apachekafka&logoColor=white)](https://www.confluent.io/cloud/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-- [Introduction](#introduction)
-- [System Architecture](#system-architecture)
-- [What You Will Learn](#what-you-will-learn)
-- [Technologies](#technologies)
-- [Project Structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Getting Started](#getting-started)
-- [Running the Pipeline](#running-the-pipeline)
-- [Configuration](#configuration)
-- [Windows Notes](#windows-notes)
-- [Next Enhancements](#next-enhancements)
-- [License](#license)
+## Why this project?
 
-## Introduction
+Many streaming demos stop at reading data from a socket and writing it somewhere else. This project goes one step further by combining live ingestion, schema validation, AI-driven enrichment, and event publishing into a small end-to-end pipeline that is easy to run locally.
 
-This project demonstrates how a real-time data pipeline can be built using common modern data engineering components:
+It is designed to help you understand how real-time data systems are assembled and how to think about reliability, observability, and fault tolerance in streaming workflows.
 
-- A JSON dataset is used as the original data source.
-- A TCP socket producer streams those records in small chunks.
-- Apache Spark consumes the socket stream and applies transformations.
-- OpenAI is used to classify each review as POSITIVE, NEGATIVE, or NEUTRAL.
-- The transformed records are serialized and sent to a Kafka topic.
-
-The repo is intentionally structured as a minimal but realistic streaming pipeline that is easy to understand and extend.
-
-## System Architecture
-
-The project flow is:
-
-1. Data is loaded from the Yelp-style review dataset.
-2. A Python socket producer sends records over a TCP stream.
-3. Spark Structured Streaming reads the socket stream.
-4. Each incoming review is parsed into a schema.
-5. A PySpark UDF calls the OpenAI API to classify the review text.
-6. The enriched record is written to Kafka using the Kafka connector.
+## Demo / pipeline preview
 
 ```mermaid
 flowchart LR
-    A["Yelp Dataset\nJSON reviews"] --> B["TCP/IP Socket\nPython Producer"]
-    B --> C["Apache Spark\nStructured Streaming"]
-    C --> D["Parse JSON schema"]
-    D --> E["OpenAI Sentiment\nAnalysis"]
-    E --> F["Kafka Topic\ncustomers_review"]
-    F --> G["Kafka Connect / Sink"]
-    G --> H["Elasticsearch\nIndexing"]
-    H --> I["Kibana\nVisualization"]
-
-    C -. pipeline processing .-> D
-    E -. feedback loop .-> C
+    A["Yelp review dataset"] --> B["Socket producer"]
+    B --> C["Spark Structured Streaming"]
+    C --> D["Schema validation"]
+    D --> E["OpenAI sentiment analysis"]
+    E --> F["Kafka topic"]
 ```
 
-The application is built around the following core files:
+## What this project does
 
-- `src/jobs/streaming-socket.py` - emits records over a TCP socket.
-- `src/jobs/spark-streaming.py` - reads the socket stream, calls OpenAI, and writes to Kafka.
-- `src/config/config.py` - stores Kafka and OpenAI settings.
-- `src/docker-compose.yml` - starts the Spark master and worker containers.
-- `src/Dockerfile.spark` - builds the Spark runtime environment.
+- Reads review records from a JSON dataset
+- Streams them over a TCP socket
+- Parses each payload with a known schema
+- Uses OpenAI to classify sentiment as POSITIVE, NEGATIVE, or NEUTRAL
+- Publishes the enriched record to Kafka
+- Runs in Docker with Spark master and worker services
 
-
-## Technologies
-
-- Python
-- Apache Spark 4.3.0
-- PySpark Structured Streaming
-- TCP/IP Sockets
-- Kafka / Confluent Cloud
-- OpenAI API
-- Docker and Docker Compose
-- Pandas
-
-## Project Structure
+## Project structure
 
 ```text
 spark-realtime-streaming/
 ├── README.md
+├── LICENSE
+├── .env.example
 ├── pyproject.toml
 ├── src/
 │   ├── Dockerfile.spark
@@ -96,6 +56,8 @@ spark-realtime-streaming/
 │   │   └── yelp_academic_dataset_review.json
 │   └── schemas/
 │       └── reviews.schema.avsc.py
+├── tests/
+│   └── test_config.py
 ├── tmp/
 │   └── spark-checkpoints/
 │       └── kafka-stream/
@@ -104,50 +66,71 @@ spark-realtime-streaming/
 
 ## Prerequisites
 
-Before running the project, make sure you have:
+Before you begin, make sure you have:
 
 - Docker Desktop or Docker Engine
 - Python 3.14 or compatible version
-- Access to a Kafka broker
+- Access to a Kafka broker or Confluent Cloud cluster
 - An OpenAI API key
-- Optional: Windows `winutils.exe` if running Spark locally on Windows
+- A terminal with git installed
+- Optional: Windows `winutils.exe` if you run Spark locally on Windows
 
-## Getting Started
+## Installation
 
-1. Clone the repository:
+### 1) Clone the repository
 
 ```bash
 git clone https://github.com/<your-username>/spark-realtime-streaming.git
 cd spark-realtime-streaming
 ```
 
-2. Create your configuration values in `src/config/config.py`:
+### 2) Create your environment file
 
-- `openai.api_key`
-- `kafka.sasl.username`
-- `kafka.sasl.password`
-- `kafka.bootstrap.servers`
-- `kafka.security.protocol`
-- `kafka.sasl.mechanism`
-
-3. Install dependencies locally if needed:
+Copy the example file and fill in your real values:
 
 ```bash
+cp .env.example .env
+```
+
+Then set the required variables in `.env`:
+
+```bash
+OPENAI_API_KEY=your-openai-api-key
+KAFKA_SASL_USERNAME=your-kafka-api-key
+KAFKA_SASL_PASSWORD=your-kafka-secret
+KAFKA_BOOTSTRAP_SERVERS=your-bootstrap-server:9092
+KAFKA_SECURITY_PROTOCOL=SASL_SSL
+KAFKA_SASL_MECHANISM=PLAIN
+KAFKA_TOPIC=customers_review
+SOCKET_HOST=spark-master
+SOCKET_PORT=8522
+```
+
+### 3) Install Python dependencies
+
+```bash
+python -m venv .venv
+# macOS / Linux
+source .venv/bin/activate
+# Windows PowerShell
+# .\.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
 python -m pip install -r src/requirements.txt
 ```
 
-4. Start the Spark containers:
+### 4) Start the Spark services
 
 ```bash
-docker compose -f src/docker-compose.yml up --build
+docker compose -f src/docker-compose.yml up --build -d
 ```
 
-This will start:
+This starts:
 
-- a Spark master at `http://localhost:9090`
-- a Spark worker connected to the master
+- Spark master on `http://localhost:9090`
+- Spark worker connected to the cluster
 
-## Running the Pipeline
+## Quick start
 
 ### 1) Start the socket producer
 
@@ -157,59 +140,53 @@ Open a new terminal and run:
 python src/jobs/streaming-socket.py
 ```
 
-This script binds to port `8522` and sends records from the Yelp dataset to the Spark socket source.
+This script listens on port `8522` and sends Yelp review records to the Spark socket source.
 
-### 2) Run the Spark streaming consumer
+### 2) Run the Spark consumer
 
-In another terminal, submit the Spark job:
+In another terminal, submit the application to the Spark master:
 
 ```bash
 docker exec -it spark-master /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.3.0 \
   /opt/spark/jobs/spark-streaming.py
 ```
 
-The Spark job does the following:
+The consumer will:
 
-- reads the socket stream
-- parses the JSON payload into a schema
-- sends the review text to OpenAI
-- classifies the sentiment
-- writes the enriched record to the Kafka topic `customers_review`
-
-You can monitor the stream logs in the Spark container output.
+- read the socket stream
+- parse JSON records using a strict schema
+- run sentiment classification with OpenAI
+- write enriched records to the Kafka topic
 
 ## Configuration
 
-The project configuration is stored in `src/config/config.py`.
+The project reads required secrets from environment variables and does not hardcode credentials in source files.
 
-Example structure:
+Key settings are loaded from `.env` and can also be overridden directly in the shell environment when needed.
 
-```python
-config = {
-    "openai": {
-        "api_key": "YOUR_OPENAI_API_KEY"
-    },
-    "kafka": {
-        "sasl.username": "YOUR_KAFKA_API_KEY",
-        "sasl.password": "YOUR_KAFKA_SECRET",
-        "bootstrap.servers": "YOUR_BOOTSTRAP_SERVER",
-        "security.protocol": "SASL_SSL",
-        "sasl.mechanism": "PLAIN"
-    }
-}
+### Recommended settings
+
+```bash
+OPENAI_API_KEY=your-openai-api-key
+KAFKA_SASL_USERNAME=your-kafka-user
+KAFKA_SASL_PASSWORD=your-kafka-secret
+KAFKA_BOOTSTRAP_SERVERS=your-broker:9092
+KAFKA_SECURITY_PROTOCOL=SASL_SSL
+KAFKA_SASL_MECHANISM=PLAIN
+KAFKA_TOPIC=customers_review
 ```
 
-Store your real credentials in this file before running the pipeline. Do not commit secrets to version control.
+This pattern is safer than storing secrets in source control and makes deployment more portable across local, Docker, and cloud environments.
 
-## Windows Notes
 
-This repo includes a Windows-specific check in the Spark consumer script. If you are running Spark locally on Windows, you may need Hadoop binaries for the streaming checkpointing mechanism.
+## Windows notes
 
-The script expects:
+If you run Spark locally on Windows, make sure Hadoop binaries are available for checkpointing:
 
-- `HADOOP_HOME` set to a valid Hadoop installation directory
-- `winutils.exe` and `hadoop.dll` inside the Hadoop `bin` folder
+- `HADOOP_HOME` must point to your Hadoop installation
+- `winutils.exe` and `hadoop.dll` must exist in the `bin` folder
 
 Example:
 
@@ -217,33 +194,24 @@ Example:
 setx HADOOP_HOME C:\hadoop
 ```
 
-Then make sure the runtime files exist under:
+## Contributing
 
-```text
-C:\hadoop\bin\winutils.exe
-C:\hadoop\bin\hadoop.dll
-```
+Contributions are welcome. If you want to improve the project:
 
-## Next Enhancements
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run the relevant tests and validation steps
+5. Open a pull request with a clear summary
 
-This project can be extended in several ways:
-
-- add Elasticsearch sink or Kafka Connect integration
-- store processed results in a data lake or warehouse
-- add dashboarding with Kibana or Grafana
-- support schema registry and Avro-based payloads
-- add more advanced NLP or topic modeling steps
-- run Kafka locally with Docker instead of Confluent Cloud
+For bug reports or feature requests, open an issue in the repository.
 
 ## License
 
-This project is provided for educational and learning purposes. Use it as a foundation for your own data engineering experiments and production-grade pipelines.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
----
+The project is intended for learning, experimentation, and practical data engineering exploration. You are free to use, modify, and extend it as long as the license terms are respected.
 
-If you want, I can also make this README more polished for GitHub by adding:
+## Contact
 
-- a project architecture diagram image section
-- badges for Python, Spark, Kafka, and Docker
-- a "demo workflow" section with screenshots
-- a more marketing-style version similar to the reference example
+For questions, suggestions, or collaboration opportunities, open an issue or reach out through the project repository.
