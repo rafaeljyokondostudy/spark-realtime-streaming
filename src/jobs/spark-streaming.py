@@ -1,13 +1,15 @@
 import os
-import time
+import shutil
 from pathlib import Path
 
-from openai import OpenAI
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, struct, to_json, udf, when
+from pyspark.sql.functions import col, from_json, udf, when
 from pyspark.sql.types import FloatType, StringType, StructField, StructType
 
-from config.config import config, load_config
+from config.config import load_config
+from streaming.idempotency import get_processed_ids_path, mark_processed, write_dead_letter
+from streaming.kafka import build_kafka_options
+from streaming.sentiment import sentiment_analysis_with_retry
 
 
 def ensure_windows_hadoop_setup() -> None:
@@ -44,55 +46,58 @@ def get_runtime_config() -> dict:
     return load_config()
 
 
-def sentiment_analysis(comment: str) -> str:
-    if not comment or not str(comment).strip():
-        return "EMPTY"
-
+def process_batch(spark: SparkSession, batch_df, batch_id: str, checkpoint_dir: Path):
     cfg = get_runtime_config()
-    client = OpenAI(api_key=cfg["openai"]["api_key"])
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a sentiment classifier. Return exactly one word: POSITIVE, "
-                    "NEGATIVE, or NEUTRAL. Do not add punctuation or explanations."
-                ),
-            },
-            {"role": "user", "content": str(comment)},
-        ],
-        timeout=30,
-    )
-    return response.choices[0].message.content.strip().upper()
+    topic = os.getenv("KAFKA_TOPIC", "customers_review")
+    processed_path = get_processed_ids_path(checkpoint_dir)
+    dead_letter_path = checkpoint_dir.parent / "dead-letter.jsonl"
 
+    rows = batch_df.toPandas().to_dict(orient="records")
+    valid_rows = []
 
-def sentiment_analysis_with_retry(comment: str, retries: int = 3, backoff_seconds: float = 1.0) -> str:
-    last_error = None
-    for attempt in range(1, retries + 1):
+    for row in rows:
+        review_id = str(row.get("review_id", "")).strip()
+        text = row.get("text")
+
+        if not review_id:
+            write_dead_letter(row, "MISSING_REVIEW_ID", dead_letter_path)
+            continue
+
+        if not text or not str(text).strip():
+            write_dead_letter(row, "MISSING_TEXT", dead_letter_path)
+            continue
+
+        if mark_processed(row, processed_path):
+            write_dead_letter(row, "DUPLICATE_EVENT", dead_letter_path)
+            continue
+
         try:
-            return sentiment_analysis(comment)
-        except Exception as exc:  # pragma: no cover - actual OpenAI failures are external
-            last_error = exc
-            if attempt == retries:
-                break
-            time.sleep(backoff_seconds * attempt)
-    raise RuntimeError(f"Sentiment analysis failed after {retries} attempts") from last_error
+            sentiment = sentiment_analysis_with_retry(str(text))
+        except Exception as exc:  # pragma: no cover - external API behavior
+            write_dead_letter(row, f"OPENAI_FAILURE:{type(exc).__name__}", dead_letter_path)
+            continue
 
+        row["feedback"] = sentiment
+        valid_rows.append(row)
 
-def build_jaas_config() -> str:
-    cfg = get_runtime_config()
-    return (
-        'org.apache.kafka.common.security.plain.PlainLoginModule required '
-        f'username="{cfg["kafka"]["sasl.username"]}" '
-        f'password="{cfg["kafka"]["sasl.password"]}";'
-    )
+    if valid_rows:
+        output_schema = StructType([
+            StructField("review_id", StringType()),
+            StructField("user_id", StringType()),
+            StructField("business_id", StringType()),
+            StructField("stars", FloatType()),
+            StructField("date", StringType()),
+            StructField("text", StringType()),
+            StructField("feedback", StringType()),
+        ])
+        kafka_df = spark.createDataFrame(valid_rows, output_schema)
+        kafka_df.selectExpr(
+            "CAST(review_id AS STRING) AS key",
+            "to_json(struct(*)) AS value",
+        ).write.format("kafka").options(**build_kafka_options(cfg, topic)).save()
 
 
 def start_streaming(spark: SparkSession, checkpoint_dir: Path):
-    cfg = get_runtime_config()
-    topic = os.getenv("KAFKA_TOPIC", "customers_review")
     stream_df = (
         spark.readStream.format("socket")
         .option("host", os.getenv("SOCKET_HOST", "spark-master"))
@@ -110,39 +115,25 @@ def start_streaming(spark: SparkSession, checkpoint_dir: Path):
     ])
 
     parsed_df = stream_df.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
-    parsed_df = parsed_df.filter(col("review_id").isNotNull() & col("text").isNotNull())
+    parsed_df = parsed_df.dropDuplicates(["review_id"])
 
-    sentiment_udf = udf(lambda text: sentiment_analysis_with_retry(text), StringType())
+    safe_sentiment_udf = udf(lambda text: sentiment_analysis_with_retry(str(text)) if text and str(text).strip() else None, StringType())
     enriched_df = parsed_df.withColumn(
         "feedback",
-        when(col("text").isNotNull(), sentiment_udf(col("text"))).otherwise(None),
+        when(col("text").isNotNull(), safe_sentiment_udf(col("text"))).otherwise(None),
     )
 
-    kafka_df = enriched_df.selectExpr(
-        "CAST(review_id AS STRING) AS key",
-        "to_json(struct(*)) AS value",
-    )
+    dead_letter_df = enriched_df.filter(col("feedback").isNull())
+    valid_df = enriched_df.filter(col("feedback").isNotNull())
 
-    kafka_options = {
-        "kafka.bootstrap.servers": cfg["kafka"]["bootstrap.servers"],
-        "kafka.security.protocol": cfg["kafka"]["security.protocol"],
-        "kafka.sasl.mechanism": cfg["kafka"]["sasl.mechanism"],
-        "kafka.sasl.jaas.config": build_jaas_config(),
-        "kafka.acks": cfg["kafka"]["acks"],
-        "kafka.enable.idempotence": str(cfg["kafka"]["enable.idempotence"]).lower(),
-        "kafka.retries": str(cfg["kafka"]["retries"]),
-        "kafka.max.in.flight.requests.per.connection": str(cfg["kafka"]["max.in.flight.requests.per.connection"]),
-        "kafka.delivery.timeout.ms": str(cfg["kafka"]["delivery.timeout.ms"]),
-        "kafka.request.timeout.ms": str(cfg["kafka"]["request.timeout.ms"]),
-        "checkpointLocation": str(checkpoint_dir.as_posix()),
-        "topic": topic,
-    }
+    dead_letter_df.writeStream.format("json").option("path", str((checkpoint_dir.parent / "dead-letter"))).option("checkpointLocation", str(checkpoint_dir.parent / "dead-letter-checkpoint")).start()
 
     return (
-        kafka_df.writeStream
-        .format("kafka")
-        .options(**kafka_options)
+        valid_df.writeStream
+        .foreachBatch(lambda batch_df, batch_id: process_batch(spark, batch_df, batch_id, checkpoint_dir))
+        .outputMode("append")
         .trigger(processingTime="5 seconds")
+        .option("checkpointLocation", str(checkpoint_dir.as_posix()))
         .start()
     )
 
@@ -151,6 +142,16 @@ if __name__ == "__main__":
     ensure_windows_hadoop_setup()
 
     checkpoint_dir = Path(__file__).resolve().parents[2] / "tmp" / "spark-checkpoints" / "kafka-stream"
+    dead_letter_checkpoint_dir = checkpoint_dir.parent / "dead-letter-checkpoint"
+    processed_ids_path = checkpoint_dir.parent / "processed-review-ids.txt"
+
+    for stale_path in [checkpoint_dir, dead_letter_checkpoint_dir, processed_ids_path]:
+        if stale_path.exists():
+            if stale_path.is_dir():
+                shutil.rmtree(stale_path)
+            else:
+                stale_path.unlink()
+
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     spark = (

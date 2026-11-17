@@ -12,6 +12,17 @@ from config.config import load_config
 
 
 class ConfigSecurityTests(unittest.TestCase):
+    def setUp(self):
+        for key in [
+            "OPENAI_API_KEY",
+            "KAFKA_SASL_USERNAME",
+            "KAFKA_SASL_PASSWORD",
+            "KAFKA_BOOTSTRAP_SERVERS",
+            "KAFKA_SECURITY_PROTOCOL",
+            "KAFKA_SASL_MECHANISM",
+        ]:
+            os.environ.pop(key, None)
+
     def test_load_config_reads_from_environment(self):
         os.environ["OPENAI_API_KEY"] = "test-openai-key"
         os.environ["KAFKA_SASL_USERNAME"] = "test-kafka-user"
@@ -28,14 +39,6 @@ class ConfigSecurityTests(unittest.TestCase):
         self.assertEqual(cfg["kafka"]["bootstrap.servers"], "broker:9092")
 
     def test_load_config_requires_missing_secrets_to_be_explicit(self):
-        for key in [
-            "OPENAI_API_KEY",
-            "KAFKA_SASL_USERNAME",
-            "KAFKA_SASL_PASSWORD",
-            "KAFKA_BOOTSTRAP_SERVERS",
-        ]:
-            os.environ.pop(key, None)
-
         with self.assertRaises(ValueError):
             load_config()
 

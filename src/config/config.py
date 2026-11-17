@@ -37,8 +37,6 @@ def _require_env(name: str) -> str:
 
 
 def load_config() -> dict:
-    _load_dotenv_file()
-
     config = {
         "openai": {
             "api_key": _require_env("OPENAI_API_KEY")
