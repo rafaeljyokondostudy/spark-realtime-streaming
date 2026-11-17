@@ -8,7 +8,9 @@ services:
       SPARK_MODE: master
       SPARK_MASTER_HOST: spark-master
       SPARK_MASTER_PORT: 7077
+      SPARK_HOME: /opt/spark
       PYTHONPATH: /opt/spark
+      PATH: /opt/spark/bin:/opt/spark/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     build:
       context: .
       dockerfile: Dockerfile.spark
@@ -40,7 +42,9 @@ services:
     environment:
       SPARK_MODE: worker
       SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_HOME: /opt/spark
       PYTHONPATH: /opt/spark
+      PATH: /opt/spark/bin:/opt/spark/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     build:
       context: .
       dockerfile: Dockerfile.spark
