@@ -3,3 +3,4 @@ confluent-kafka>=2.16.1
 fastavro>=1.13.1
 openai>=3.46.0
 pandas>=2.2.3,<3.0.0
+python-dotenv == 1.2.4
